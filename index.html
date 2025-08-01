@@ -10,12 +10,10 @@
       padding: 40px;
       color: #333;
     }
-
     h2 {
       text-align: center;
       color: #2c3e50;
     }
-
     .container {
       max-width: 600px;
       margin: auto;
@@ -24,13 +22,11 @@
       border-radius: 10px;
       box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
     }
-
     label {
       display: block;
       margin-bottom: 10px;
       font-weight: 600;
     }
-
     input, select {
       width: 100%;
       padding: 8px 12px;
@@ -40,7 +36,6 @@
       border-radius: 6px;
       font-size: 14px;
     }
-
     button {
       width: 100%;
       padding: 12px;
@@ -52,11 +47,9 @@
       cursor: pointer;
       transition: background-color 0.3s ease;
     }
-
     button:hover {
       background-color: #2980b9;
     }
-
     #output {
       background-color: #f4f4f4;
       border-left: 5px solid #3498db;
@@ -85,13 +78,10 @@
     <label>Take Profit 2: <input id="tp2" type="number" step="any"></label>
     <label>Take Profit 3: <input id="tp3" type="number" step="any"></label>
     <label>Capital ($): <input id="capital" type="number" value="200"></label>
-    <label>Margin Usage (% of capital): <input id="marginUsage" type="number" value="25"></label>
     <label>Risk % (per trade): <input id="risk" type="number" value="3"></label>
-    <label>Leverage: <input id="leverage" type="number" value="20"></label>
     <label>Trading Fee % (per side): <input id="fee" type="number" value="0.04" step="any"></label>
 
     <button onclick="calculate()">Calculate</button>
-
     <pre id="output"></pre>
   </div>
 
@@ -104,99 +94,67 @@
       const tp2 = parseFloat(document.getElementById("tp2").value);
       const tp3 = parseFloat(document.getElementById("tp3").value);
       const capital = parseFloat(document.getElementById("capital").value);
-      const marginUsage = parseFloat(document.getElementById("marginUsage").value) / 100;
       const riskPercent = parseFloat(document.getElementById("risk").value);
-      const leverage = parseFloat(document.getElementById("leverage").value);
       const feePercent = parseFloat(document.getElementById("fee").value) / 100;
 
-      const capitalUsed = capital * marginUsage;
-      const riskAmount = (capitalUsed * riskPercent) / 100;
+      if (!entry || !sl || !capital || !riskPercent) {
+        document.getElementById("output").textContent = "Please enter valid input values.";
+        return;
+      }
 
-      const stopLossDiff = Math.abs(entry - sl);
-      const positionSize = (capital * leverage) / entry;
+      const riskAmount = (capital * riskPercent) / 100;
+      const slDiff = Math.abs(entry - sl);
+      const tokenSize = riskAmount / slDiff;
 
-      const avgTP = (tp1 || tp2 || tp3 || entry);
+      // Auto calculate required leverage so liquidation happens AFTER SL
+      const buffer = slDiff * 1.25;  // keep liq further than SL by 25%
+      const liquidation = direction === "long" ? entry - buffer : entry + buffer;
+      const requiredLeverage = Math.abs(entry / (entry - liquidation));
+
+      const marginUsed = (entry * tokenSize) / requiredLeverage;
+      const marginUsagePct = (marginUsed / capital) * 100;
+
+      const avgTP = tp1 || tp2 || tp3 || entry;
       const feesPerToken = (entry + avgTP) * feePercent;
-      const feeTotal = feesPerToken * positionSize;
+      const feeTotal = feesPerToken * tokenSize;
+
+      const breakevenPrice = direction === "long"
+        ? entry + (feeTotal / tokenSize)
+        : entry - (feeTotal / tokenSize);
 
       const tpProfits = [tp1, tp2, tp3].map(tp => {
         if (!tp) return null;
-        const priceDiff = direction === "long" ? tp - entry : entry - tp;
-        const gross = priceDiff * positionSize;
+        const diff = direction === "long" ? tp - entry : entry - tp;
+        const gross = diff * tokenSize;
         const net = gross - feeTotal;
         const rrr = gross / riskAmount;
         return { tp, gross: gross.toFixed(2), net: net.toFixed(2), rrr: rrr.toFixed(2) };
       });
 
-      // Liquidation
-      let liquidationPrice = direction === "long"
-        ? entry - (entry / leverage)
-        : entry + (entry / leverage);
-
-      // Suggested leverage
-      const bufferPercent = 0.005;
-      const adjustedSL = direction === "long"
-        ? sl - (entry * bufferPercent)
-        : sl + (entry * bufferPercent);
-
-      const idealLeverage = Math.abs(entry / (entry - adjustedSL));
-
-      let leverageNote = "";
-      if (direction === "long") {
-        if (Math.abs(liquidationPrice - adjustedSL) < 5) {
-          leverageNote = "✅ SL close to liquidation — good alignment.";
-        } else if (liquidationPrice > adjustedSL) {
-          leverageNote = "⚠️ SL is above liquidation — risk of liquidation before SL.";
-        } else {
-          leverageNote = "ℹ️ Liquidation far from SL — you could increase leverage safely.";
-        }
-      } else {
-        if (Math.abs(liquidationPrice - adjustedSL) < 5) {
-          leverageNote = "✅ SL close to liquidation — good alignment.";
-        } else if (liquidationPrice < adjustedSL) {
-          leverageNote = "⚠️ SL is below liquidation — risk of liquidation before SL.";
-        } else {
-          leverageNote = "ℹ️ Liquidation far from SL — you could increase leverage safely.";
-        }
-      }
-
-      // Breakeven = entry + (total fees ÷ position size)
-      const breakevenPrice = direction === "long"
-        ? entry + (feeTotal / positionSize)
-        : entry - (feeTotal / positionSize);
-
-      const maxTrades = Math.floor(capital / (capital * marginUsage));
+      const liquidationPrice = liquidation.toFixed(4);
 
       let result = `
 📊 Futures Trade Summary (${direction.toUpperCase()}):
 Entry: ${entry}
-SL: ${sl}
-Capital: $${capital} (Using ${marginUsage * 100}% → $${capitalUsed.toFixed(2)})
+Stop‑Loss: ${sl}
+Capital: $${capital}
 Risk: ${riskPercent}% → $${riskAmount.toFixed(2)}
-Leverage: ${leverage}x
-Position Size: ${positionSize.toFixed(2)} tokens
-Fee Applied: ${(feePercent * 100).toFixed(2)}% per side
-Total Fees (approx): $${feeTotal.toFixed(2)}
-Estimated Liquidation Price: ${liquidationPrice.toFixed(6)}
-Suggested Leverage (SL = Liquidation ± buffer): ${idealLeverage.toFixed(2)}x
-${leverageNote}
-📈 Breakeven Price (after fees): ${breakevenPrice.toFixed(4)}
+Auto‑Leverage: ${requiredLeverage.toFixed(2)}x
+Token Size: ${tokenSize.toFixed(4)}
+Margin Used: $${marginUsed.toFixed(2)} (${marginUsagePct.toFixed(2)}%)
+Est. Liquidation Price: ${liquidationPrice}
+Breakeven (after fees): ${breakevenPrice.toFixed(4)}
+Fees Total: $${feeTotal.toFixed(2)}
 
 📈 Take Profit Analysis:
 `;
-
       tpProfits.forEach((p, i) => {
-        if (p) {
-          result += `TP${i + 1} (${p.tp}): Gross $${p.gross}, Net $${p.net}, RRR: ${p.rrr}\n`;
-        }
+        if (p) result += `TP${i + 1} (${p.tp}): Gross $${p.gross}, Net $${p.net}, RRR: ${p.rrr}\n`;
       });
 
       result += `
-🧠 Based on margin usage & capital:
-➡️ You can run approx. ${maxTrades} trade(s) of this size in parallel.
-🔐 Use lower margin to diversify trades and protect capital.
-🟢 SL hit = controlled loss
-❌ Liquidation = uncontrolled loss — always set SL!
+✅ SL hit = Controlled loss ($${riskAmount.toFixed(2)})
+❌ Liquidation = full loss — always use SL!
 `;
 
       document.getElementById("output").textContent = result;
